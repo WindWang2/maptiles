@@ -17,7 +17,8 @@ max_lat = 85.0511287798
 proj_ex = 20037508.3427892439067364
 # ----------------------------------------------------------------
 
-def wgs_to_mercaotr(lng:float, lat:float) -> Tuple[float, float]:
+
+def wgs_to_mercaotr(lng: float, lat: float) -> Tuple[float, float]:
     lat = max_lat if lat > max_lat else lat
     lat = -max_lat if lat < -max_lat else lat
     x = lng * proj_ex / 180
@@ -25,27 +26,30 @@ def wgs_to_mercaotr(lng:float, lat:float) -> Tuple[float, float]:
     y = y * proj_ex / 180
     return x, y
 
-def wgs_to_tilexy(lng:float,
-                  lat:float,
-                  zoom_level:int,
-                  is_topleft_origin:bool=False):
+
+def wgs_to_tilexy(lng: float,
+                  lat: float,
+                  zoom_level: int,
+                  is_topleft_origin: bool = False):
     x, y = wgs_to_mercaotr(lng, lat)
     x /= proj_ex
     y /= proj_ex
     num = 2**(zoom_level)
     x = (x + 1) / 2
     y = (y + 1) / 2
-    assert(zoom_level < 20  and zoom_level > 0)
+    assert (zoom_level < 20 and zoom_level > 0)
     if is_topleft_origin:
         y = (1 - y) / 2
 
-    tile_x = math.floor(x*num)
-    tile_y = math.floor(y*num)
+    tile_x = math.floor(x * num)
+    tile_y = math.floor(y * num)
     return tile_x, tile_y
 
+
 if __name__ == '__main__':
-    print(wgs_to_mercaotr(120.23770568,23.83216986))
+    print(wgs_to_mercaotr(120.23770568, 23.83216986))
     # TMS
     print(wgs_to_tilexy(120.23770568, 23.8321698, 19))
     # Google
     print(wgs_to_tilexy(120.23770568, 23.8321698, 19, is_topleft_origin=True))
+    # test
