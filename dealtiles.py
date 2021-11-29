@@ -42,6 +42,18 @@ def mercator_to_wgs(x: float, y: float) -> Tuple[float, float]:
                           math.pi / 2)
     return x2, y2
 
+# tile xy to Mercator xy
+def tilexy_to_xy(x: float, y: float, zoom_level: int, is_topleft_origin: bool = False):
+    assert (zoom_level < 20 and zoom_level > 0)
+    num = 2 ** (zoom_level)
+    tx = ((x / num) * 2 - 1) * proj_ex
+    ty = ((y / num) * 2 - 1) * proj_ex
+    if is_topleft_origin:
+        ty = ((1 - y / num) * 2 - 1) * proj_ex
+
+    # print('mercator', tx, ty)
+    return tx, ty
+
 
 def xy_to_tilexy(x: float,
                  y: float,
@@ -153,12 +165,25 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
     lt_tile_x, lt_tile_y = xy_to_tilexy(lt_x, lt_y, zoom_level)
     rb_tile_x, rb_tile_y = xy_to_tilexy(rb_x, rb_y, zoom_level)
 
+    fixToPixel = lambda x: math.floor((x - math.floor(x)) * 256) * 1/256 + math.floor(x)
+    print('fix_before', lt_tile_x, lt_tile_y ,rb_tile_x, rb_tile_y)
+    lt_tile_x = fixToPixel(lt_tile_x)
+    lt_tile_y = fixToPixel(lt_tile_y)
+    rb_tile_x = fixToPixel(rb_tile_x)
+    rb_tile_y = fixToPixel(rb_tile_y)
+    print('fix_after', lt_tile_x, lt_tile_y ,rb_tile_x, rb_tile_y)
+
+    f_lt_lon, f_lt_lat =  mercator_to_wgs(*tilexy_to_xy(lt_tile_x, lt_tile_y, zoom_level))
+    f_rb_lon, f_rb_lat =  mercator_to_wgs(*tilexy_to_xy(rb_tile_x, rb_tile_y, zoom_level))
+    print(lt_lon, lt_lat, f_lt_lon, f_lt_lat)
+    print(rb_lon, rb_lat,f_rb_lon, f_rb_lat)
+
     img_width = abs(rb_tile_x - lt_tile_x) * 256
     img_height = abs(rb_tile_y - lt_tile_y) * 256
-    print(img_height, img_width)
+    print('height', 'width', img_height, img_width)
 
     tile_x_list = np.arange(math.floor(lt_tile_x), rb_tile_x, 1)
-    print(tile_x_list, rb_tile_x)
+    # print(tile_x_list, rb_tile_x)
     # print(rb_tile_x)
     tile_y_list = np.arange(math.floor(rb_tile_y), lt_tile_y, 1)
 
@@ -193,7 +218,7 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
         print(tile_y, rb_tile_y, lt_tile_y)
         if tile_y < rb_tile_y:
             tile_left[1] = 0
-            tile_right[1] = math.floor(abs(tile_y + 1 - rb_tile_y) * 256) + 1
+            tile_right[1] = math.floor(abs(tile_y + 1 - rb_tile_y) * 256)
             img_left[1] = math.floor(abs(img_height)) - tile_right[1]
             img_right[1] = math.floor(img_height)
         elif tile_y + 1 < lt_tile_y:
@@ -222,9 +247,9 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
     [print(i) for i in tile_list]
     tasks = [
         Dump_tiles_Thread('../../Downloads/test_sample.mbtiles', tile_list, 0,
-                          14),
-        Dump_tiles_Thread('../../Downloads/test_sample.mbtiles', tile_list, 14,
-                          20)
+                          5),
+        Dump_tiles_Thread('../../Downloads/test_sample.mbtiles', tile_list, 5,
+                          9)
     ]
     for i in tasks:
         i.start()
@@ -232,10 +257,12 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
         i.join()
     # print(tile_list)
     extent = {}
-    extent['LT'] = (lt_lon, lt_lat)
-    extent['RB'] = (rb_lon, rb_lat)
-    gt = (extent['LT'][0], (extent['RB'][0] - extent['LT'][0]) / img_width, 0,
-          extent['LT'][1], 0, (extent['RB'][1] - extent['LT'][1]) / img_height)
+    extent['LT'] = (f_lt_lon, f_lt_lat)
+    extent['RB'] = (f_rb_lon, f_rb_lat)
+    gt = (extent['LT'][0], (extent['RB'][0] - extent['LT'][0]) / math.floor(img_width), 0,
+          extent['LT'][1], 0, (extent['RB'][1] - extent['LT'][1]) / math.floor(img_height))
+    print(extent)
+    print('gt', gt)
     driver = gdal.GetDriverByName('GTiff')
     ds = driver.Create('../xxx.tif', math.floor(img_width),
                        math.floor(img_height), 3, gdal.GDT_Byte)
@@ -274,13 +301,14 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
 
 
 if __name__ == '__main__':
-    print(wgs_to_mercaotr(120.23770568, 23.83216986))
+    # print(wgs_to_mercaotr(120.23770568, 23.83216986))
     # TMS
     # print(wgs_to_tilexy(120.23770568, 23.8321698, 19))
     # Google
-    print(
-        xy_to_tilexy(*wgs_to_mercaotr(120.459268, 23.596711),
-                     19,
-                     is_topleft_origin=True))
+    # print(
+    #     xy_to_tilexy(*wgs_to_mercaotr(120.459268, 23.596711),
+    #                  19,
+    #                  is_topleft_origin=True))
     # test
-    main(120.4514480, 23.601130, 120.45358, 23.59855, 19, 'tste')
+    main(120.4524480, 23.601130, 120.45368, 23.59995, 19, 'tste')
+    # main(120.43629,23.60542,120.45643,23.59085,19,'ttt')
