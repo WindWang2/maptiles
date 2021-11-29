@@ -6,10 +6,14 @@ Some part of code reference from https://github.com/zhengjie9510/google-map-down
 @author: WindWang2
 '''
 import math
-from osgeo import gdal
+from osgeo import gdal, osr
 from typing import Tuple
 import numpy as np
 import itertools
+import multiprocessing
+import threading
+from threading import Thread
+import sqlite3
 
 # define some constants of the maps
 # ----------------------------------------------------------------
@@ -28,6 +32,15 @@ def wgs_to_mercaotr(lon: float, lat: float) -> Tuple[float, float]:
     y = math.log(math.tan((90 + lat) * math.pi / 360)) / (math.pi / 180)
     y = y * proj_ex / 180
     return x, y
+
+
+# Web Mercator to WGS-84
+def mercator_to_wgs(x: float, y: float) -> Tuple[float, float]:
+    x2 = x / proj_ex * 180
+    y2 = y / proj_ex * 180
+    y2 = 180 / math.pi * (2 * math.atan(math.exp(y2 * math.pi / 180)) -
+                          math.pi / 2)
+    return x2, y2
 
 
 def xy_to_tilexy(x: float,
@@ -51,7 +64,7 @@ def xy_to_tilexy(x: float,
     return tile_x, tile_y
 
 
-class Downloader(Thread):
+class Downloader_Thread(Thread):
     # multiple threads downloader
     def __init__(self, index, count, urls, datas):
         # index represents the number of threads
@@ -87,6 +100,48 @@ class Downloader(Thread):
             self.datas[i] = self.download(url)
 
 
+def generate_image(out_file_path: str):
+    pass
+
+
+# sqlite_mutex = threading.Lock()
+# All the data are not the same, so we do not use lock.
+
+
+class Dump_tiles_Thread(Thread):
+    def __init__(self, mbtfile_path, tile_list, start_id, end_id):
+        super().__init__()
+        self.mbtfile_path = mbtfile_path
+        self.start_id = start_id
+        self.end_id = end_id
+        self.tile_list = tile_list
+
+    def dump_tile(self, cons, idx, idy, zoom_level):
+        q_str = "SELECT * FROM tiles WHERE zoom_level={} and tile_column={} and tile_row={}".format(
+            zoom_level, idx, idy)
+        # print(q_str)
+        re = cons.execute(q_str)
+        out = re.fetchall()
+        if len(out) == 0:
+            return []
+        else:
+            return out[0][3]
+
+    def run(self):
+        # with sqlite_mutex:
+        # if not run normal, add check_same_thread = False;
+        cons = sqlite3.connect(self.mbtfile_path)
+        for i in range(self.start_id, self.end_id):
+            idx = self.tile_list[i]['tx']
+            idy = self.tile_list[i]['ty']
+            zoom_level = self.tile_list[i]['z']
+            self.tile_list[i]['img_data'] = self.dump_tile(
+                cons, idx, idy, zoom_level)
+
+        cons.commit()
+        cons.close()
+
+
 # lt: left top, rb: right bottom
 def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
          zoom_level: int, out_file_path: str):
@@ -98,13 +153,17 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
     lt_tile_x, lt_tile_y = xy_to_tilexy(lt_x, lt_y, zoom_level)
     rb_tile_x, rb_tile_y = xy_to_tilexy(rb_x, rb_y, zoom_level)
 
-    img_width = abs(rb_tile_x - lt_tile_x)
-    img_height = abs(rb_tile_y - lt_tile_y)
+    img_width = abs(rb_tile_x - lt_tile_x) * 256
+    img_height = abs(rb_tile_y - lt_tile_y) * 256
+    print(img_height, img_width)
 
-    tile_x_list = np.arange(lt_tile_x, rb_tile_x + 1, 1)
-    tile_y_list = np.arange(rb_tile_y, lt_tile_y + 1, 1)
+    tile_x_list = np.arange(math.floor(lt_tile_x), rb_tile_x, 1)
+    print(tile_x_list, rb_tile_x)
+    # print(rb_tile_x)
+    tile_y_list = np.arange(math.floor(rb_tile_y), lt_tile_y, 1)
 
     tile_list = []
+    # TODO: deal the google tiles (with is_topleft_origin is True)
     for ix, iy in itertools.product(tile_x_list, tile_y_list):
         tile_x, tile_y = math.floor(ix), math.floor(iy)
 
@@ -121,20 +180,22 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
         elif tile_x + 1 < rb_tile_x:
             tile_left[0] = 0
             tile_right[0] = 256
-            img_left[0] = math.floor(abs(tile_x - lt_tile_x)) * 256
+            img_left[0] = math.floor(abs(tile_x - lt_tile_x) * 256)
             img_right[0] = img_left[0] + 256
         else:
+            # print(tile_x, rb_tile_x, lt_tile_x)
             tile_left[0] = 0
-            tile_right[0] = math.floor(abs(rb_tile_x - tile_x - 1) * 256)
-            img_left[0] = math.floor(img_width * 256) - tile_right[0]
-            img_right[0] = math.floor(img_width * 256)
-
+            tile_right[0] = math.floor(abs(rb_tile_x - tile_x) * 256)
+            img_left[0] = math.floor(img_width) - tile_right[0]
+            img_right[0] = math.floor(img_width)
+            # print(tile_left[0], tile_right[0], img_left[0], img_right[0])
         # from bottom to top
+        print(tile_y, rb_tile_y, lt_tile_y)
         if tile_y < rb_tile_y:
             tile_left[1] = 0
-            tile_right[1] = math.floor(abs(tile_y + 1 - rb_tile_y) * 256)
-            img_left[1] = math.floor(abs(lt_tile_y - tile_y - 1) * 256)
-            img_right[1] = math.floor(img_height * 256)
+            tile_right[1] = math.floor(abs(tile_y + 1 - rb_tile_y) * 256) + 1
+            img_left[1] = math.floor(abs(img_height)) - tile_right[1]
+            img_right[1] = math.floor(img_height)
         elif tile_y + 1 < lt_tile_y:
             tile_left[1] = 0
             tile_right[1] = 256
@@ -145,11 +206,71 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
             tile_right[1] = 256
             img_left[1] = 0
             img_right[1] = 256 - tile_left[1]
+            print(img_left[1])
+        # print(tile_left, tile_right, img_left, img_right)
+        tile_list.append({
+            'tx': tile_x,
+            'ty': tile_y,
+            'z': zoom_level,
+            'tl': tile_left,
+            'tr': tile_right,
+            'iml': img_left,
+            'imr': img_right,
+            'img_data': []
+        })
+    print(len(tile_list))
+    [print(i) for i in tile_list]
+    tasks = [
+        Dump_tiles_Thread('../../Downloads/test_sample.mbtiles', tile_list, 0,
+                          14),
+        Dump_tiles_Thread('../../Downloads/test_sample.mbtiles', tile_list, 14,
+                          20)
+    ]
+    for i in tasks:
+        i.start()
+    for i in tasks:
+        i.join()
+    # print(tile_list)
+    extent = {}
+    extent['LT'] = (lt_lon, lt_lat)
+    extent['RB'] = (rb_lon, rb_lat)
+    gt = (extent['LT'][0], (extent['RB'][0] - extent['LT'][0]) / img_width, 0,
+          extent['LT'][1], 0, (extent['RB'][1] - extent['LT'][1]) / img_height)
+    driver = gdal.GetDriverByName('GTiff')
+    ds = driver.Create('../xxx.tif', math.floor(img_width),
+                       math.floor(img_height), 3, gdal.GDT_Byte)
+    data = np.zeros((3, math.floor(img_height), math.floor(img_width)),
+                    dtype=np.uint8)
+    ds.SetGeoTransform(gt)
+    proj = osr.SpatialReference()
+    proj.ImportFromEPSG(4326)
+    ds.SetSpatialRef(proj)
 
-        tile_list.append(
-            (tile_x, tile_y, tile_left, tile_right, img_left, img_right))
+    for idx, itile in enumerate(tile_list):
+        if itile['img_data'] == []:
+            print(itile)
+            continue
+        tile_mem = gdal.FileFromMemBuffer('/vsimem/test.jpg',
+                                          itile['img_data'])
+        tile_ds = gdal.OpenEx('/vsimem/test.jpg')
+        tile_data = tile_ds.ReadAsArray()
+        # print(tile_data.shape)
+        # print(data.shape)
+        dxs = itile['iml'][1]
+        dxe = itile['imr'][1]
+        dys = itile['iml'][0]
+        dye = itile['imr'][0]
+        ixs = itile['tl'][1]
+        ixe = itile['tr'][1]
+        iys = itile['tl'][0]
+        iye = itile['tr'][0]
 
-    print(tile_list)
+        data[:, dxs:dxe, dys:dye] = tile_data[:, ixs:ixe, iys:iye]
+
+    for i in range(3):
+        ds.GetRasterBand(i + 1).WriteArray(data[i, :, :])
+
+    print(len(tile_list))
 
 
 if __name__ == '__main__':
@@ -157,6 +278,9 @@ if __name__ == '__main__':
     # TMS
     # print(wgs_to_tilexy(120.23770568, 23.8321698, 19))
     # Google
-    # print(wgs_to_tilexy(120.23770568, 23.8321698, 19, is_topleft_origin=True))
+    print(
+        xy_to_tilexy(*wgs_to_mercaotr(120.459268, 23.596711),
+                     19,
+                     is_topleft_origin=True))
     # test
-    main(120.23770568, 23.8321698, 120.23870568, 23.8311698, 19, 'tste')
+    main(120.4514480, 23.601130, 120.45358, 23.59855, 19, 'tste')
