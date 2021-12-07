@@ -157,6 +157,7 @@ class Dump_tiles_Thread(Thread):
 # lt: left top, rb: right bottom
 def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
          zoom_level: int, out_file_path: str):
+
     assert (zoom_level < 20 and zoom_level > 0)
     res = proj_ex / (2**zoom_level)
     lt_x, lt_y = wgs_to_mercaotr(lt_lon, lt_lat)
