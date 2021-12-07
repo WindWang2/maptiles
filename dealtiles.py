@@ -42,10 +42,14 @@ def mercator_to_wgs(x: float, y: float) -> Tuple[float, float]:
                           math.pi / 2)
     return x2, y2
 
+
 # tile xy to Mercator xy
-def tilexy_to_xy(x: float, y: float, zoom_level: int, is_topleft_origin: bool = False):
+def tilexy_to_xy(x: float,
+                 y: float,
+                 zoom_level: int,
+                 is_topleft_origin: bool = False):
     assert (zoom_level < 20 and zoom_level > 0)
-    num = 2 ** (zoom_level)
+    num = 2**(zoom_level)
     tx = ((x / num) * 2 - 1) * proj_ex
     ty = ((y / num) * 2 - 1) * proj_ex
     if is_topleft_origin:
@@ -154,6 +158,7 @@ class Dump_tiles_Thread(Thread):
         cons.close()
 
 
+<<<<<<< HEAD
 # lt: left top, rb: right bottom
 def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
          zoom_level: int, out_file_path: str):
@@ -179,10 +184,11 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
     print(lt_lon, lt_lat, f_lt_lon, f_lt_lat)
     print(rb_lon, rb_lat,f_rb_lon, f_rb_lat)
 
+=======
+def generate_tile_list(lt_tile_x, lt_tile_y, rb_tile_x, rb_tile_y, zoom_level):
+>>>>>>> 5b4afdd6d53a7e511d3a959549acd447c0771eb0
     img_width = abs(rb_tile_x - lt_tile_x) * 256
     img_height = abs(rb_tile_y - lt_tile_y) * 256
-    print('height', 'width', img_height, img_width)
-
     tile_x_list = np.arange(math.floor(lt_tile_x), rb_tile_x, 1)
     # print(tile_x_list, rb_tile_x)
     # print(rb_tile_x)
@@ -244,28 +250,46 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
             'imr': img_right,
             'img_data': []
         })
-    print(len(tile_list))
-    [print(i) for i in tile_list]
-    tasks = [
-        Dump_tiles_Thread('../../Downloads/test_sample.mbtiles', tile_list, 0,
-                          5),
-        Dump_tiles_Thread('../../Downloads/test_sample.mbtiles', tile_list, 5,
-                          9)
-    ]
+
+    return tile_list
+
+
+def get_tile_from_mbtiles(tile_list, mbtfile_path, n_jobs=4):
+    num_of_tile = len(tile_list)
+    tasks = []
+    if num_of_tile < 100:
+        tasks.append(Dump_tiles_Thread(mbtfile_path, tile_list, 0,
+                                       num_of_tile))
+    else:
+        xx_list = [int(x * num_of_tile / n_jobs) for x in range(n_jobs + 1)]
+        for i in range(n_jobs):
+            tasks.append(
+                Dump_tiles_Thread(mbtfile_path, tile_list, xx_list[i],
+                                  xx_list[i + 1]))
     for i in tasks:
         i.start()
     for i in tasks:
         i.join()
-    # print(tile_list)
+
+
+def merge_tile_geotif(lt_tile_x, lt_tile_y, rb_tile_x, rb_tile_y, zoom_level,
+                      tile_list, out_file_path):
+    f_lt_lon, f_lt_lat = mercator_to_wgs(
+        *tilexy_to_xy(lt_tile_x, lt_tile_y, zoom_level))
+    f_rb_lon, f_rb_lat = mercator_to_wgs(
+        *tilexy_to_xy(rb_tile_x, rb_tile_y, zoom_level))
+    img_width = abs(rb_tile_x - lt_tile_x) * 256
+    img_height = abs(rb_tile_y - lt_tile_y) * 256
     extent = {}
     extent['LT'] = (f_lt_lon, f_lt_lat)
     extent['RB'] = (f_rb_lon, f_rb_lat)
-    gt = (extent['LT'][0], (extent['RB'][0] - extent['LT'][0]) / math.floor(img_width), 0,
-          extent['LT'][1], 0, (extent['RB'][1] - extent['LT'][1]) / math.floor(img_height))
-    print(extent)
-    print('gt', gt)
+    gt = (extent['LT'][0],
+          (extent['RB'][0] - extent['LT'][0]) / math.floor(img_width), 0,
+          extent['LT'][1], 0,
+          (extent['RB'][1] - extent['LT'][1]) / math.floor(img_height))
+
     driver = gdal.GetDriverByName('GTiff')
-    ds = driver.Create('../xxx.tif', math.floor(img_width),
+    ds = driver.Create(out_file_path, math.floor(img_width),
                        math.floor(img_height), 3, gdal.GDT_Byte)
     data = np.zeros((3, math.floor(img_height), math.floor(img_width)),
                     dtype=np.uint8)
@@ -273,7 +297,6 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
     proj = osr.SpatialReference()
     proj.ImportFromEPSG(4326)
     ds.SetSpatialRef(proj)
-
     for idx, itile in enumerate(tile_list):
         if itile['img_data'] == []:
             print(itile)
@@ -298,7 +321,34 @@ def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
     for i in range(3):
         ds.GetRasterBand(i + 1).WriteArray(data[i, :, :])
 
-    print(len(tile_list))
+
+# lt: left top, rb: right bottom
+def main(lt_lon: float, lt_lat: float, rb_lon: float, rb_lat: float,
+         zoom_level: int, out_file_path: str):
+    assert (zoom_level < 20 and zoom_level > 0)
+
+    lt_x, lt_y = wgs_to_mercaotr(lt_lon, lt_lat)
+    rb_x, rb_y = wgs_to_mercaotr(rb_lon, rb_lat)
+
+    lt_tile_x, lt_tile_y = xy_to_tilexy(lt_x, lt_y, zoom_level)
+    rb_tile_x, rb_tile_y = xy_to_tilexy(rb_x, rb_y, zoom_level)
+
+    fixToPixel = lambda x: math.floor(
+        (x - math.floor(x)) * 256) * 1 / 256 + math.floor(x)
+
+    # fix the tile to pixel
+    lt_tile_x = fixToPixel(lt_tile_x)
+    lt_tile_y = fixToPixel(lt_tile_y)
+    rb_tile_x = fixToPixel(rb_tile_x)
+    rb_tile_y = fixToPixel(rb_tile_y)
+
+    tile_list = generate_tile_list(lt_tile_x, lt_tile_y, rb_tile_x, rb_tile_y,
+                                   zoom_level)
+
+    mbtfile_path = '/Volumes/fast/tw-new.mbtiles'
+    get_tile_from_mbtiles(tile_list, mbtfile_path, n_jobs=4)
+    merge_tile_geotif(lt_tile_x, lt_tile_y, rb_tile_x, rb_tile_y, zoom_level,
+                      tile_list, out_file_path)
 
 
 if __name__ == '__main__':
@@ -311,5 +361,6 @@ if __name__ == '__main__':
     #                  19,
     #                  is_topleft_origin=True))
     # test
-    main(120.4524480, 23.601130, 120.45368, 23.59995, 19, 'tste')
+    # main(120.4524480, 23.601130, 120.45368, 23.59995, 19, '../xxxx_2.tif')
+    main(120.416, 23.652, 120.586, 23.546, 19, '../xxxx_big.tif')
     # main(120.43629,23.60542,120.45643,23.59085,19,'ttt')
